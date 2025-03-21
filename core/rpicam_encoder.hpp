@@ -12,6 +12,7 @@
 #include "core/video_options.hpp"
 
 #include "encoder/encoder.hpp"
+#include "secondary_stream.hpp"
 
 typedef std::function<void(void *, size_t, int64_t, bool)> EncodeOutputReadyCallback;
 typedef std::function<void(libcamera::ControlList &)> MetadataReadyCallback;
@@ -41,7 +42,11 @@ public:
 		else if (options->sync == 2)
 			cl.set(libcamera::controls::rpi::SyncMode, libcamera::controls::rpi::SyncModeClient);
 		SetControls(cl);
+
+		// Start secondary streaming background task (pending request from outside program)
+		secondary_stream.start();
 	}
+
 	// This is callback when the encoder gives you the encoded output data.
 	void SetEncodeOutputReadyCallback(EncodeOutputReadyCallback callback) { encode_output_ready_callback_ = callback; }
 	void SetMetadataReadyCallback(MetadataReadyCallback callback) { metadata_ready_callback_ = callback; }
@@ -61,17 +66,26 @@ public:
 		void *mem = span.data();
 		if (!buffer || !mem)
 			throw std::runtime_error("no buffer to encode");
+
+		// If we've waited long enough since the last frame, send it over to the secondary stream.
+		if (secondary_stream.ready())
+		{
+			secondary_stream.pushFrame(span);
+		}
+
 		auto ts = completed_request->metadata.get(controls::SensorTimestamp);
 		int64_t timestamp_ns = ts ? *ts : buffer->metadata().timestamp;
 		{
 			std::lock_guard<std::mutex> lock(encode_buffer_queue_mutex_);
 			encode_buffer_queue_.push(completed_request); // creates a new reference
 		}
+
 		encoder_->EncodeBuffer(buffer->planes()[0].fd.get(), span.size(), mem, info, timestamp_ns / 1000);
 
 		// Tell our caller that encoding is underway.
 		return true;
 	}
+
 	VideoOptions *GetOptions() const { return static_cast<VideoOptions *>(options_.get()); }
 	void StopEncoder() { encoder_.reset(); }
 
@@ -109,4 +123,5 @@ private:
 	std::mutex encode_buffer_queue_mutex_;
 	EncodeOutputReadyCallback encode_output_ready_callback_;
 	MetadataReadyCallback metadata_ready_callback_;
+	SecondaryStream secondary_stream;
 };

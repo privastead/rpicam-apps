@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 
 #include "core/rpicam_encoder.hpp"
+#include "core/secondary_stream.hpp"
 #include "output/output.hpp"
 
 using namespace std::placeholders;
@@ -73,6 +74,7 @@ static void event_loop(RPiCamEncoder &app)
 	app.ConfigureVideo(get_colourspace_flags(options->codec));
 	app.StartEncoder();
 	app.StartCamera();
+
 	auto start_time = std::chrono::high_resolution_clock::now();
 
 	// Monitoring for keypresses and signals.
@@ -85,7 +87,7 @@ static void event_loop(RPiCamEncoder &app)
 	signal(SIGPIPE, default_signal_handler);
 	pollfd p[1] = { { STDIN_FILENO, POLLIN, 0 } };
 
-	for (unsigned int count = 0; ; count++)
+	for (unsigned int count = 0;; count++)
 	{
 		RPiCamEncoder::Msg msg = app.Wait();
 		if (msg.type == RPiCamApp::MsgType::Timeout)
@@ -105,8 +107,7 @@ static void event_loop(RPiCamEncoder &app)
 
 		LOG(2, "Viewfinder frame " << count);
 		auto now = std::chrono::high_resolution_clock::now();
-		bool timeout = !options->frames && options->timeout &&
-					   ((now - start_time) > options->timeout.value);
+		bool timeout = !options->frames && options->timeout && ((now - start_time) > options->timeout.value);
 		bool frameout = options->frames && count >= options->frames;
 		if (timeout || frameout || key == 'x' || key == 'X')
 		{
@@ -117,7 +118,9 @@ static void event_loop(RPiCamEncoder &app)
 			app.StopEncoder();
 			return;
 		}
+
 		CompletedRequestPtr &completed_request = std::get<CompletedRequestPtr>(msg.payload);
+
 		if (!app.EncodeBuffer(completed_request, app.VideoStream()))
 		{
 			// Keep advancing our "start time" if we're still waiting to start recording (e.g.
